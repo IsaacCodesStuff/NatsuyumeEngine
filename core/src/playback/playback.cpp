@@ -170,7 +170,8 @@ void Playback::handleMpvEvent(mpv_event *event)
             const char *args[] = { "set", "pause", "yes", nullptr };
             mpv_command_async(m_mpv, 0, args);
         }
-        if (onReadyToPlay) onReadyToPlay();
+        auto readyCb = onReadyToPlay;
+        if (readyCb) readyCb();
         break;
     }
 

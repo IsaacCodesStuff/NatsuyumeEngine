@@ -383,8 +383,7 @@ void Queue::restoreState()
     int64_t savedPos = m_savedPosition;
     const Track &track = m_tracks.at(m_currentTrackIndex);
 
-    auto prevCallback = m_currentPlayback->onReadyToPlay;
-    m_currentPlayback->onReadyToPlay = [this, savedPos, prevCallback]() {
+    m_currentPlayback->onReadyToPlay = [this, savedPos]() {
         m_isRestoringState = false;
 
         if (savedPos > 0)
@@ -396,7 +395,6 @@ void Queue::restoreState()
         if (next.isValid())
             m_currentPlayback->appendTrack(next);
 
-        m_currentPlayback->onReadyToPlay = prevCallback;
         if (onTrackChanged)     onTrackChanged();
         if (onRestoreCompleted) onRestoreCompleted();
     };

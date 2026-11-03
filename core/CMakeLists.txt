@@ -103,4 +103,15 @@ else()
         get_filename_component(_taglib_parent ${_taglib_inc} DIRECTORY)
         target_include_directories(natsuyume_core PRIVATE ${_taglib_parent})
     endforeach()
+
+    # -----------------------------------------------------------------------
+    # Standalone Linux CLI Executable
+    # -----------------------------------------------------------------------
+    add_executable(natsuyume-cli src/cli/main_cli.cpp)
+    target_include_directories(natsuyume-cli PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/domain
+    )
+    target_link_libraries(natsuyume-cli PRIVATE natsuyume_core)
 endif()
