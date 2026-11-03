@@ -158,8 +158,8 @@ The following issues were identified during the read-only architectural audit. A
 ### 4.1 Confirmed Source-Level Observations
 These issues have been verified by direct inspection of repository source files:
 
-1. **Android CMake Coupling:** `core/CMakeLists.txt` hardcodes Android NDK variables (`${JNI_LIBS}`, `${JNI_INCLUDE}`), links the NDK ICU stub and Android `log-lib`, and cannot configure or build standalone on desktop Linux.
-2. **Android Logging Leak in Core:** `core/src/player/playbackmanager.cpp` (lines 5-6) and `core/src/playback/queue.cpp` (line 6) directly `#include <android/log.h>`, causing compilation failures on non-Android systems.
+1. **Android CMake Coupling (Resolved in Stage 0):** `core/CMakeLists.txt` previously hardcoded Android NDK variables (`${JNI_LIBS}`, `${JNI_INCLUDE}`), linked the NDK ICU stub and Android `log-lib`, and could not configure or build standalone on desktop Linux. Resolved in Stage 0 by separating Android and desktop configurations via `if(ANDROID) ... else() ... endif()` with system `pkg-config` imported targets.
+2. **Android Logging Leak in Core (Resolved in Stage 0):** `core/src/player/playbackmanager.cpp` and `core/src/playback/queue.cpp` directly included `<android/log.h>`, causing compilation failures on non-Android systems. Resolved in Stage 0 by abstracting logging behind `core/src/core/logger.h`.
 3. **Qt Dependency in CLI:** `core/src/cli/main_cli.cpp` (lines 1-3) includes `<QCoreApplication>` and `<QSocketNotifier>`, introducing an undeclared Qt dependency. It is also omitted from all CMake build targets.
 4. **CLI Startup Initialization Bug:** `core/src/cli/main_cli.cpp` instantiates `NatsuyumeCore` and calls `core.init()` without first calling `core.setDataDir()`. In `core/src/core/natsuyumecore.cpp` (lines 77-90), `dataDir` defaults to empty string, causing database paths to resolve to `/library.db` and `/userdata.db`. On standard Linux systems without root permissions, this causes database opening to fail and aborts callback wiring.
 5. **Engine Duplication in Queues:** `core/src/playback/queue.h` (line 112) declares `Playback *m_currentPlayback`. Each queue instantiates its own `Playback` instance, and `core/src/player/playbackmanager.cpp` (line 259) calls `q->initPlayback()` inside a loop for every restored queue, allocating multiple concurrent MPV handles.
@@ -179,14 +179,13 @@ These issues represent architectural risks identified during static analysis (un
 
 ### 4.3 Confirmed Runtime & Environment Observations
 1. **Desktop Host Toolchain Status:**
-   - Operating System: `x86_64` Linux.
-   - `cmake`: Not found in system PATH (`command -v cmake` fails).
-   - C++ Compilers: GCC (`/usr/bin/g++`, version 16.2.1) and Clang (`/usr/bin/clang++`, version 23.1.4) are available.
-   - Build Tools: `pkg-config` (version 3.0.10), `make` (version 4.4.1), and `ninja` (version 1.13.2) are available.
-   - Available Libraries: `taglib` (2.3.2), `icu-uc` (78.3), `icu-i18n` (78.3), and `sqlite3` (3.54.0) are present and discoverable via `pkg-config`.
-   - Missing Desktop Dependency: `libmpv` is not installed (`pkg-config --modversion mpv` fails, and `/usr/include/mpv/client.h` is not present).
-2. **Incompatible Bundled Binaries:** The precompiled binaries in `android/jni/libs/arm64-v8a/` are ELF 64-bit ARM aarch64 binaries for Android API 21 and cannot be linked on an `x86_64` Linux host.
-3. **Execution Verification Status:** The core engine has not yet been built or executed natively on desktop Linux.
+   - Operating System: `x86_64` Linux (Arch Linux / CachyOS).
+   - CMake: Version 4.4.5 available.
+   - C++ Compilers: GCC (`/usr/bin/g++`, version 16.2.1) and Clang (`/usr/bin/clang++`, version 23.1.4) available.
+   - Build Tools: `pkg-config` (version 3.0.10), `make` (version 4.4.1), and `ninja` (version 1.13.2) available.
+   - Available Libraries: `libmpv` (2.5.0), `taglib` (2.3.2), `icu-uc` (78.3), `icu-i18n` (78.3), and `sqlite3` (3.54.0) present and discoverable via `pkg-config`.
+2. **Incompatible Bundled Binaries:** The precompiled binaries in `android/jni/libs/arm64-v8a/` are ELF 64-bit ARM aarch64 binaries for Android API 21 and cannot be linked on an `x86_64` Linux host. Desktop builds link system libraries discovered by `pkg-config`.
+3. **Execution Verification Status:** The core engine (`libnatsuyume_core.so`) has been compiled, linked, and successfully dynamically loaded via `dlopen` on desktop Linux as of Stage 0. Actual `libmpv` initialization and end-to-end audio playback remain untested until Stage 1.
 
 ---
 
@@ -198,38 +197,60 @@ Refactoring is organized into six strictly sequential stages. Each stage has a c
 Stage 0 ──► Stage 1 ──► Stage 2 ──► Stage 3 ──► Stage 4 ──► Stage 5
 Desktop     POSIX CLI   Event       Single      Database    API Cleanup
 Build       & No Qt     Contract    Engine      Ownership   & Types
+(COMPLETED) (PENDING)
 ```
 
 ---
 
-### Stage 0: Desktop Build Foundation
+### Stage 0: Desktop Build Foundation (COMPLETED)
+- **Status:** **Completed & Verified** (Committed in `b7b4c71` on branch `main`).
 - **Objective:** Establish a clean desktop Linux build baseline for `natsuyume_core` without modifying Android build scripts or prebuilt binaries.
-- **Scope:**
-  - Create `core/src/core/logger.h` to abstract `<android/log.h>` behind portable macros safe for conditionals (using `do { ... } while (0)`).
-  - Replace `<android/log.h>` in `playbackmanager.cpp` and `queue.cpp` with `logger.h`.
-  - Update `core/CMakeLists.txt` to keep the `if(ANDROID)` branch intact while adding an `else()` branch for desktop that searches for system dependencies (`libmpv`, `taglib`, `icu-uc`, `sqlite3`) via `pkg-config`.
-- **Constraint:** **Stage 0 is not an engine rewrite.** It introduces only the minimal portability changes required to compile `natsuyume_core` natively on Linux desktop.
-- **Checkpoint:**
-  - Successfully compile and link `natsuyume_core` natively on desktop Linux.
-  - Verify that Android-only dependencies and symbols (such as Android logging or NDK headers) do not leak into the desktop build target.
-  - Any newly introduced compiler warnings must be addressed.
-  - Unrelated pre-existing warnings in untouched code may be documented without expanding Stage 0 scope.
-  - **Stop here for review.**
+- **Verified Implementation Details:**
+  - Added a desktop-compatible, statement-safe logging implementation in `core/src/core/logger.h` with an `inline` variadic helper using `<cstdio>` and `<cstdarg>`.
+  - Preserved Android logging behavior (`__android_log_print(ANDROID_LOG_DEBUG, "NatsuyumePM", ...)`) under `#ifdef __ANDROID__`.
+  - Added native Linux CMake dependency configuration in `core/CMakeLists.txt` using `pkg-config` (`mpv`, `taglib`, `icu-uc`, `icu-i18n`, `sqlite3`) with automatic TagLib parent include mapping.
+  - Added missing standard-library includes required for strict C++17 compilation under GCC 16 / modern libstdc++ (`<mutex>` in `core/src/library/library.h`, `<algorithm>` in `core/src/player/librarymanager.cpp`).
+  - Added repository-root `.gitignore` covering generated build trees (`build/`, `build-*/`, `cmake-build-*/`, `out/`) and in-tree CMake generation artifacts.
+  - Successfully configured and cleanly compiled `natsuyume_core` natively on Linux desktop (`build-desktop/libnatsuyume_core.so`, 2.4 MB, 0 compiler warnings, 0 errors).
+  - Successfully dynamically loaded `libnatsuyume_core.so` at runtime via `dlopen` (verified via Python `ctypes.CDLL`).
+  - Confirmed via `nm -D` and `readelf -d` that the desktop shared library links against standard desktop host libraries and contains zero Android-specific symbols or dependencies.
+- **Important Qualifications & Untested Boundaries:**
+  - The Android build has not been independently tested in this cycle (bundled ARM64-v8a prebuilts and JNI bridge build scripts were preserved intact, but not compiled on an Android target).
+  - Actual `libmpv` initialization (`mpv_create`) and audio playback have not been tested.
+  - A successful dynamic library load verifies linker symbols and relocations, but does not establish that every runtime feature or callback functions correctly.
+  - Do not treat these untested areas as verified.
+- **Files Modified / Added in Stage 0:**
+  - `.gitignore` (added)
+  - `core/CMakeLists.txt` (modified)
+  - `core/src/core/logger.h` (added)
+  - `core/src/library/library.h` (modified)
+  - `core/src/playback/queue.cpp` (modified)
+  - `core/src/player/librarymanager.cpp` (modified)
+  - `core/src/player/playbackmanager.cpp` (modified)
 
 ---
 
-### Stage 1: CLI Integration & Qt Decoupling
-- **Objective:** Provide a working, pure C++ command-line interface for testing playback without Qt.
-- **Scope:**
-  - Rewrite `core/src/cli/main_cli.cpp` using standard C++ and POSIX `poll()` on `STDIN_FILENO`.
-  - Remove all Qt includes (`<QCoreApplication>`, `<QSocketNotifier>`, `<QTimer>`).
-  - Configure default data directory initialization (`core.setDataDir()`) on startup.
-  - Register `add_executable(natsuyume-cli src/cli/main_cli.cpp)` in `core/CMakeLists.txt`.
-- **Intended Stage 1 Data Directory Behavior:**
-  - Use `$XDG_DATA_HOME/natsuyume` when `XDG_DATA_HOME` is set.
-  - Otherwise use `~/.local/share/natsuyume`.
-  - Do not use the current working directory as the default persistent data directory.
-  - Note: This behavior is specified for Stage 1 implementation and must not be implemented until Stage 1 is explicitly authorized.
+### Stage 1: CLI Integration & Qt Decoupling (PENDING AUTHORIZATION)
+- **Status:** **Pending Authorization** (Next active stage; implementation not yet authorized).
+- **Objective:** Provide a working, pure C++ command-line interface for testing playback without Qt, integrated against the native Linux core.
+- **Scope & Objectives:**
+  - Replace the Qt-dependent CLI input mechanism in `core/src/cli/main_cli.cpp` (`<QCoreApplication>`, `<QSocketNotifier>`, `<QTimer>`) with a pure C++/POSIX approach (`poll()` on `STDIN_FILENO`).
+  - Integrate the CLI with existing core APIs (`NatsuyumeCore` public methods).
+  - Ensure the CLI uses the core's library-scanning functionality (`core.scanFolders(...)`, `core.scanProgress()`) instead of maintaining a separate scanner implementation.
+  - Establish appropriate application data directory:
+    - Use `$XDG_DATA_HOME/natsuyume` when `XDG_DATA_HOME` is set.
+    - Otherwise, use `~/.local/share/natsuyume`.
+    - Do not use the current working directory as the default persistent data directory.
+  - Ensure initialization failures (database opening, directory creation) are handled gracefully with clear user diagnostics.
+  - Register `add_executable(natsuyume-cli src/cli/main_cli.cpp)` in `core/CMakeLists.txt` (under desktop branch) and link `natsuyume_core`.
+- **Strict Architectural Boundaries (Strictly Prohibited in Stage 1):**
+  - Do not redesign `Queue` or `PlaybackManager`.
+  - Do not introduce the proposed single-playback-engine architecture (deferred to Stage 3).
+  - Do not implement the playback event system or wakeup self-pipe (deferred to Stage 2).
+  - Do not modify database schemas, migrations, or SQLite access patterns (deferred to Stage 4).
+  - Do not begin type consolidation or API cleanup (deferred to Stage 5).
+  - Do not expand Stage 1 into unrelated refactoring.
+  - The goal is to integrate the existing CLI with the newly portable core, not to redesign the application.
 - **Checkpoint:** Build `natsuyume-cli` and run an interactive test session against a directory of audio tracks (scan, play, pause, next, prev, quit).
 
 ---
@@ -322,8 +343,30 @@ Agents must maintain a strict operational boundary between phases:
 
 ---
 
+### 6.3 Standard Agent Execution Workflow (Handoff Protocol)
+To ensure seamless collaboration across multi-turn agent sessions, every agent must follow this exact 9-step execution workflow:
+
+1. **Read Project Instructions:** Read `AGENTS.md` and `CLAUDE.md` before inspecting, planning, or modifying code.
+2. **Inspect Actual Repository State:** Always verify the active branch, working tree state, and file contents directly rather than relying on previous agent reports or conversation summaries.
+3. **Identify Existing APIs & Call Sites:** Inspect existing classes, method signatures, and usages before proposing replacements or new interfaces.
+4. **Present Implementation Plan First:** Present a concise, structured implementation plan and obtain explicit user approval before modifying files.
+5. **Keep Changes Strictly Within Active Stage:** Never implement features, fixes, or refactoring reserved for subsequent roadmap stages.
+6. **Build and Test Incrementally:** Run compiler builds and tests after each meaningful implementation batch rather than deferring verification to the end.
+7. **No Silent Architectural Changes:** Never alter data ownership, threading models, or database schemas without explicit documentation and prior approval.
+8. **Distinguish Verified from Untested Behavior:** Accurately report what was compiled, linked, and executed; explicitly list unverified assumptions and untested areas.
+9. **Deliver Structured Completion Reports:** Report exact modified files, commands executed, compiler/runtime results, Git status, and outstanding issues.
+
+---
+
 ## 7. Current Development Status
 
-- **Current Phase:** Pre-Stage-0 Planning & Preparation.
-- **Authorization State:** **No implementation stage is authorized.** All source code, build scripts, database schemas, and configuration files must remain unmodified.
-- **Next Step:** Authorization and execution of **Stage 0: Desktop Build Foundation** (introducing `core/src/core/logger.h` and desktop `CMakeLists.txt` support). Stage 0 requires separate, explicit user authorization before any edits occur.
+- **Current Repository State:**
+  - Branch: `main` (synchronized with `origin/main`).
+  - Active Commit: `b7b4c71` ("Build core natively on Linux").
+  - Working Tree: Clean (`nothing to commit, working tree clean`).
+  - Native Desktop Build Artifacts: Verified shared library present at `build-desktop/libnatsuyume_core.so` (2.4 MB).
+- **Completed Stages:**
+  - **Stage 0: Desktop Build Foundation** (Completed, verified, and committed in `b7b4c71`).
+- **Current Phase:** Pre-Stage-1 Planning & Authorization.
+- **Authorization State:** **Stage 1 is NOT yet authorized.** All source code, build scripts, database schemas, and configuration files must remain unmodified.
+- **Next Step:** Explicit user authorization and execution of **Stage 1: CLI Integration & Qt Decoupling**.
