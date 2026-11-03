@@ -1,0 +1,17 @@
+# Build output directories
+build/
+build-*/
+cmake-build-*/
+out/
+
+# In-source CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+.ninja_deps
+.ninja_log
+build.ninja

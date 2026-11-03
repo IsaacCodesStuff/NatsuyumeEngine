@@ -3,7 +3,7 @@
 #include <random>
 #include <chrono>
 #include <cstring>
-#include <android/log.h>
+#include "logger.h"
 
 // ---------------------------------------------------------------------------
 // ICU locale-aware string comparison

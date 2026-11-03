@@ -1,4 +1,5 @@
 #include "librarymanager.h"
+#include <algorithm>
 #include <filesystem>
 #include <sqlite3.h>
 #include <thread>

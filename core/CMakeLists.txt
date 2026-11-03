@@ -22,10 +22,12 @@ set(CORE_SOURCES
     src/player/playbackmanager.cpp
     src/player/librarymanager.cpp
     src/player/userdatamanager.cpp
-
-    # SQLite3 amalgamation — compiled directly, no system lib needed
-    ${JNI_INCLUDE}/sqlite3.c
 )
+
+if(ANDROID)
+    # SQLite3 amalgamation — compiled directly, no system lib needed
+    list(APPEND CORE_SOURCES ${JNI_INCLUDE}/sqlite3.c)
+endif()
 
 # ---------------------------------------------------------------------------
 # Shared library target
@@ -42,38 +44,63 @@ target_include_directories(natsuyume_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/library
     ${CMAKE_CURRENT_SOURCE_DIR}/src/playback
     ${CMAKE_CURRENT_SOURCE_DIR}/src/player
-
-    ${JNI_INCLUDE}            # sqlite3.h, unicode/ live here
-    ${JNI_INCLUDE}/taglib
-    ${JNI_INCLUDE}/mpv
 )
 
-# ---------------------------------------------------------------------------
-# Prebuilt libraries
-# ---------------------------------------------------------------------------
+if(ANDROID)
+    target_include_directories(natsuyume_core PRIVATE
+        ${JNI_INCLUDE}            # sqlite3.h, unicode/ live here
+        ${JNI_INCLUDE}/taglib
+        ${JNI_INCLUDE}/mpv
+    )
 
-add_library(mpv SHARED IMPORTED)
-set_target_properties(mpv PROPERTIES
-    IMPORTED_LOCATION ${JNI_LIBS}/libmpv.so
-)
+    # ---------------------------------------------------------------------------
+    # Prebuilt libraries
+    # -----------------------------------------------------------------------
+    add_library(mpv SHARED IMPORTED)
+    set_target_properties(mpv PROPERTIES
+        IMPORTED_LOCATION ${JNI_LIBS}/libmpv.so
+    )
 
-add_library(tag STATIC IMPORTED)
-set_target_properties(tag PROPERTIES
-    IMPORTED_LOCATION ${JNI_LIBS}/libtag.a
-)
+    add_library(tag STATIC IMPORTED)
+    set_target_properties(tag PROPERTIES
+        IMPORTED_LOCATION ${JNI_LIBS}/libtag.a
+    )
 
-# ---------------------------------------------------------------------------
-# Android system libraries
-# ---------------------------------------------------------------------------
-find_library(log-lib log)
+    # ---------------------------------------------------------------------------
+    # Android system libraries
+    # -----------------------------------------------------------------------
+    find_library(log-lib log)
 
-# ---------------------------------------------------------------------------
-# Link
-# ---------------------------------------------------------------------------
-set(CMAKE_ANDROID_STL_TYPE c++_static)
-target_link_libraries(natsuyume_core PRIVATE
-    mpv
-    tag
-    icu          # NDK-provided ICU stub (replaces icuuc on Android)
-    ${log-lib}
-)
+    # ---------------------------------------------------------------------------
+    # Link
+    # -----------------------------------------------------------------------
+    set(CMAKE_ANDROID_STL_TYPE c++_static)
+    target_link_libraries(natsuyume_core PRIVATE
+        mpv
+        tag
+        icu          # NDK-provided ICU stub (replaces icuuc on Android)
+        ${log-lib}
+    )
+else()
+    # -----------------------------------------------------------------------
+    # Desktop Linux dependencies via pkg-config
+    # -----------------------------------------------------------------------
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
+    pkg_check_modules(TAGLIB REQUIRED IMPORTED_TARGET taglib)
+    pkg_check_modules(ICU REQUIRED IMPORTED_TARGET icu-uc icu-i18n)
+    pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
+
+    target_link_libraries(natsuyume_core PRIVATE
+        PkgConfig::MPV
+        PkgConfig::TAGLIB
+        PkgConfig::ICU
+        PkgConfig::SQLITE3
+    )
+
+    # TagLib pkg-config points to <prefix>/include/taglib, but sources use <taglib/*.h>
+    foreach(_taglib_inc ${TAGLIB_INCLUDE_DIRS})
+        get_filename_component(_taglib_parent ${_taglib_inc} DIRECTORY)
+        target_include_directories(natsuyume_core PRIVATE ${_taglib_parent})
+    endforeach()
+endif()

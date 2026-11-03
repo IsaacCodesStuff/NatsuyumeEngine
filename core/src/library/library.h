@@ -6,6 +6,7 @@
 #include <functional>
 #include <unordered_map>
 #include <shared_mutex>
+#include <mutex>
 #include <cstdint>
 #include <sqlite3.h>
 #include "track.h"

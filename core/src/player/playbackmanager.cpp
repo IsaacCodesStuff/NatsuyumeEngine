@@ -2,8 +2,7 @@
 #include "metadata.h"
 #include <chrono>
 #include <sqlite3.h>
-#include <android/log.h>
-#define PMLOG(...) __android_log_print(ANDROID_LOG_DEBUG, "NatsuyumePM", __VA_ARGS__)
+#include "logger.h"
 
 static int64_t nowSeconds()
 {
