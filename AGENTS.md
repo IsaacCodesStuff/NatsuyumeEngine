@@ -160,14 +160,14 @@ These issues have been verified by direct inspection of repository source files:
 
 1. **Android CMake Coupling (Resolved in Stage 0):** `core/CMakeLists.txt` previously hardcoded Android NDK variables (`${JNI_LIBS}`, `${JNI_INCLUDE}`), linked the NDK ICU stub and Android `log-lib`, and could not configure or build standalone on desktop Linux. Resolved in Stage 0 by separating Android and desktop configurations via `if(ANDROID) ... else() ... endif()` with system `pkg-config` imported targets.
 2. **Android Logging Leak in Core (Resolved in Stage 0):** `core/src/player/playbackmanager.cpp` and `core/src/playback/queue.cpp` directly included `<android/log.h>`, causing compilation failures on non-Android systems. Resolved in Stage 0 by abstracting logging behind `core/src/core/logger.h`.
-3. **Qt Dependency in CLI:** `core/src/cli/main_cli.cpp` (lines 1-3) includes `<QCoreApplication>` and `<QSocketNotifier>`, introducing an undeclared Qt dependency. It is also omitted from all CMake build targets.
-4. **CLI Startup Initialization Bug:** `core/src/cli/main_cli.cpp` instantiates `NatsuyumeCore` and calls `core.init()` without first calling `core.setDataDir()`. In `core/src/core/natsuyumecore.cpp` (lines 77-90), `dataDir` defaults to empty string, causing database paths to resolve to `/library.db` and `/userdata.db`. On standard Linux systems without root permissions, this causes database opening to fail and aborts callback wiring.
+3. **Qt Dependency in CLI (Resolved in Stage 1):** `core/src/cli/main_cli.cpp` previously included `<QCoreApplication>` and `<QSocketNotifier>`, introducing an undeclared Qt dependency. Resolved in Stage 1 by replacing it with a pure C++17/POSIX input mechanism using `poll()` on `STDIN_FILENO`, and registering the `natsuyume-cli` executable in `core/CMakeLists.txt` under the native desktop branch.
+4. **CLI Startup Initialization Bug (Resolved in Stage 1):** `core/src/cli/main_cli.cpp` previously called `core.init()` without first calling `core.setDataDir()`. In `core/src/core/natsuyumecore.cpp` (lines 77-90), `dataDir` defaulted to empty string, causing database paths to resolve to `/library.db` and `/userdata.db`. Resolved in Stage 1 by resolving standard XDG application directories (`$XDG_DATA_HOME/natsuyume` or `~/.local/share/natsuyume`), creating the directory, and explicitly passing it via `core.setDataDir(dataDir)` prior to `core.init()`.
 5. **Engine Duplication in Queues:** `core/src/playback/queue.h` (line 112) declares `Playback *m_currentPlayback`. Each queue instantiates its own `Playback` instance, and `core/src/player/playbackmanager.cpp` (line 259) calls `q->initPlayback()` inside a loop for every restored queue, allocating multiple concurrent MPV handles.
 6. **QueueSession Pointer Ownership Defect:** In `core/src/player/queuesession.cpp` (line 69), `removeQueueAt` erases `Queue*` from its internal vector without deleting the object. While `QueueManager::closeQueue` in `core/src/player/queuemanager.cpp` (line 180) manually deletes `toDelete`, direct usage of `QueueSession::removeQueueAt` permanently leaks heap memory.
 7. **Database Migration Sequence Bug:** In `core/src/library/userdata.cpp` (line 76), `exec("ALTER TABLE playlists ADD COLUMN description...")` runs before line 85 runs `CREATE TABLE IF NOT EXISTS playlists`, failing on fresh databases.
 8. **Duplicate Track Dropping via Composite Primary Keys:** In `core/src/library/userdata.cpp`, `playlist_tracks` has `PRIMARY KEY (playlist_id, path)` (line 98) and `queue_tracks` has `PRIMARY KEY (queue_id, track_path)` (line 126). Inserting the same track path multiple times into the same playlist or queue results in the second instance being silently discarded upon database save/restore via `INSERT OR IGNORE`.
 9. **Data Model Duplication:** `core/src/domain/track.h` (`Track`) and `core/src/core/coretypes.h` (`CoreTrack`) define identical 20-field data structures. Deep member-by-member copy loops in `core/src/core/natsuyumecore.cpp` (lines 19-51) translate between them redundantly.
-10. **Undrained Library Callbacks:** In `core/src/player/librarymanager.cpp` (lines 40-57), `m_pendingCallbacks` is only processed when `drainCallbacks()` is invoked. Neither `NatsuyumeCore` nor `main_cli.cpp` calls this method during scanning.
+10. **Undrained Library Callbacks (Addressed in Stage 1 for CLI):** In `core/src/player/librarymanager.cpp` (lines 40-57), `m_pendingCallbacks` is only processed when `drainCallbacks()` is invoked. Addressed in Stage 1 for the CLI by calling `core.drainLibraryCallbacks()` on every tick of `main_cli.cpp`'s event loop and during blocking scan waits; formal event-loop pumping across the engine remains scheduled for Stage 2.
 
 ### 4.2 Suspected Concurrency and Stability Risks
 These issues represent architectural risks identified during static analysis (unverified runtime consequences):
@@ -185,7 +185,7 @@ These issues represent architectural risks identified during static analysis (un
    - Build Tools: `pkg-config` (version 3.0.10), `make` (version 4.4.1), and `ninja` (version 1.13.2) available.
    - Available Libraries: `libmpv` (2.5.0), `taglib` (2.3.2), `icu-uc` (78.3), `icu-i18n` (78.3), and `sqlite3` (3.54.0) present and discoverable via `pkg-config`.
 2. **Incompatible Bundled Binaries:** The precompiled binaries in `android/jni/libs/arm64-v8a/` are ELF 64-bit ARM aarch64 binaries for Android API 21 and cannot be linked on an `x86_64` Linux host. Desktop builds link system libraries discovered by `pkg-config`.
-3. **Execution Verification Status:** The core engine (`libnatsuyume_core.so`) has been compiled, linked, and successfully dynamically loaded via `dlopen` on desktop Linux as of Stage 0. Actual `libmpv` initialization and end-to-end audio playback remain untested until Stage 1.
+3. **Execution Verification Status:** The core engine (`libnatsuyume_core.so`) and CLI executable (`natsuyume-cli`) have been compiled, linked, and successfully executed on desktop Linux as of Stage 1. Actual `libmpv` initialization (`mpv_create`, `mpv_initialize`), audio playback, transport controls (`play`, `pause`, `next`, `prev`, `seek`, `volume`), metadata extraction, library scanning, and SQLite session persistence have been verified through both automated regression suites and interactive testing against a personal music library.
 
 ---
 
@@ -197,7 +197,7 @@ Refactoring is organized into six strictly sequential stages. Each stage has a c
 Stage 0 ──► Stage 1 ──► Stage 2 ──► Stage 3 ──► Stage 4 ──► Stage 5
 Desktop     POSIX CLI   Event       Single      Database    API Cleanup
 Build       & No Qt     Contract    Engine      Ownership   & Types
-(COMPLETED) (PENDING)
+(COMPLETED) (COMPLETED) (NEXT)
 ```
 
 ---
@@ -230,32 +230,58 @@ Build       & No Qt     Contract    Engine      Ownership   & Types
 
 ---
 
-### Stage 1: CLI Integration & Qt Decoupling (PENDING AUTHORIZATION)
-- **Status:** **Pending Authorization** (Next active stage; implementation not yet authorized).
+### Stage 1: CLI Integration & Qt Decoupling (COMPLETED)
+- **Status:** **Completed & Verified** (Committed in `762b6aa` on branch `main`).
 - **Objective:** Provide a working, pure C++ command-line interface for testing playback without Qt, integrated against the native Linux core.
-- **Scope & Objectives:**
-  - Replace the Qt-dependent CLI input mechanism in `core/src/cli/main_cli.cpp` (`<QCoreApplication>`, `<QSocketNotifier>`, `<QTimer>`) with a pure C++/POSIX approach (`poll()` on `STDIN_FILENO`).
-  - Integrate the CLI with existing core APIs (`NatsuyumeCore` public methods).
-  - Ensure the CLI uses the core's library-scanning functionality (`core.scanFolders(...)`, `core.scanProgress()`) instead of maintaining a separate scanner implementation.
-  - Establish appropriate application data directory:
-    - Use `$XDG_DATA_HOME/natsuyume` when `XDG_DATA_HOME` is set.
-    - Otherwise, use `~/.local/share/natsuyume`.
-    - Do not use the current working directory as the default persistent data directory.
-  - Ensure initialization failures (database opening, directory creation) are handled gracefully with clear user diagnostics.
-  - Register `add_executable(natsuyume-cli src/cli/main_cli.cpp)` in `core/CMakeLists.txt` (under desktop branch) and link `natsuyume_core`.
-- **Strict Architectural Boundaries (Strictly Prohibited in Stage 1):**
-  - Do not redesign `Queue` or `PlaybackManager`.
-  - Do not introduce the proposed single-playback-engine architecture (deferred to Stage 3).
-  - Do not implement the playback event system or wakeup self-pipe (deferred to Stage 2).
-  - Do not modify database schemas, migrations, or SQLite access patterns (deferred to Stage 4).
-  - Do not begin type consolidation or API cleanup (deferred to Stage 5).
-  - Do not expand Stage 1 into unrelated refactoring.
-  - The goal is to integrate the existing CLI with the newly portable core, not to redesign the application.
-- **Checkpoint:** Build `natsuyume-cli` and run an interactive test session against a directory of audio tracks (scan, play, pause, next, prev, quit).
+- **Verified Implementation Details:**
+  - **Qt Decoupling:** Replaced the prototype Qt CLI in `core/src/cli/main_cli.cpp` (`<QCoreApplication>`, `<QSocketNotifier>`, `<QTimer>`) with a pure C++17/POSIX input mechanism using `poll()` on `STDIN_FILENO` with a 100ms tick.
+  - **Terminal Stdin Handling:** Implemented an RAII `StdinNonBlockingGuard` that configures `O_NONBLOCK` on `STDIN_FILENO` and reliably restores original terminal flags on destruction.
+  - **Async-Signal-Safe Shutdown:** Installed `sigaction` for `SIGINT` and `SIGTERM` with `sa_flags = 0` (no `SA_RESTART`) using a `volatile std::sig_atomic_t` flag, unblocking `poll()` immediately with `EINTR` to trigger orderly shutdown and persistence.
+  - **Core Integration:** Integrated the CLI directly against public `NatsuyumeCore` methods (`init()`, `setDataDir()`, `restoreLastSession()`, `scanFolder()`, `isScanning()`, `drainLibraryCallbacks()`, `saveAndShutdown()`, transport controls).
+  - **XDG Data Directory Resolution:** Resolved persistent database paths using `$XDG_DATA_HOME/natsuyume` when set, falling back to `$HOME/.local/share/natsuyume`. Initialization gracefully aborts with diagnostic messages if neither is set or directory creation fails.
+  - **Session Restoration:** Invoked `core.restoreLastSession()` after `core.init()`, restoring saved queues, active queue index, current track index, and playback position from `userdata.db`.
+  - **Restored Queue Preservation:** Added startup logic (`if (core.trackList().empty())`) ensuring that a startup scan argument (`argv[1]`) updates the library without overwriting or replacing an already restored active session queue.
+  - **Numeric Track Selection Guard:** Numeric selection jumps within the active queue, and only falls back to creating a queue from library tracks when the active queue is empty. Out-of-bounds input on a non-empty queue reports `"Invalid track index."` without altering the queue.
+  - **EOF Command Handling:** If `read()` encounters EOF while uncommitted characters remain in `inputAccumulator`, a trailing newline is appended to ensure the final command is executed before shutdown.
+  - **Overlapping Scan Guard:** The CLI queries `core.isScanning()` before initiating folder indexing, rejecting duplicate requests with `"Error: A library scan is already in progress."` while allowing the active background scan to finish.
+  - **Targeted Playback Callback-Lifetime Fixes:**
+    - `Playback::handleMpvEvent` (`core/src/playback/playback.cpp`): Copies `onReadyToPlay` into a local stack `std::function` before invocation (`auto readyCb = onReadyToPlay; if (readyCb) readyCb();`), preventing callable destruction if member callbacks are reassigned during execution.
+    - `Queue::restoreState` (`core/src/playback/queue.cpp`): Removed redundant `m_currentPlayback->onReadyToPlay = prevCallback;` statement. In `PlaybackManager`, `onTrackChanged()` already safely re-binds persistent callbacks via `connectCurrentPlaybackCallbacks()`, resolving a self-destruction race that previously caused a `SIGSEGV` during session restoration.
+    - *Note:* These are targeted callback-lifetime fixes for session restoration; broader callback threading and concurrency harmonization remain scheduled for Stage 2.
+  - **CMake Target Registration:** Added `add_executable(natsuyume-cli src/cli/main_cli.cpp)` to `core/CMakeLists.txt` strictly within the native desktop branch (`else()`), linking `natsuyume_core`.
+- **Verification Results:**
+  - **Desktop Build:** Clean Debug build of both `natsuyume_core` (7.2 MB) and `natsuyume-cli` (540 KB) with 0 compiler warnings and 0 errors.
+  - **Automated Regression Suite (All Passed with Exit Code 0):**
+    - Startup without a saved session (clean initialization, empty library notification, clean exit).
+    - Session restoration (restores saved queue, active track index marker `> [N]`, and playback state).
+    - Preservation of restored session queue when launched with a scan directory argument.
+    - Numeric selection on empty queue with empty library, empty queue with populated library, and non-empty queue with invalid bounds.
+    - EOF processing with and without trailing newline, including trailing numeric jump commands.
+    - Overlapping scan rejection (`"Error: A library scan is already in progress."`) and subsequent command responsiveness.
+    - GDB session restoration and shutdown test confirmed normal exit (`Inferior exited normally`, exit code 0, 0 crashes).
+  - **Manual Verification:**
+    - Verified against a real 150-track personal music library.
+    - Verified actual audio playback via `libmpv`.
+    - Verified transport controls: track selection, navigation (`next`, `prev`), pause, resume, volume adjustment, and seeking.
+    - Verified session persistence across separate CLI launches (restoring active queue and current track).
+- **Known Limitations & Untested Boundaries:**
+  - Stage 1 is strictly a CLI integration and verification stage; it does not represent a complete engine repair or architectural stabilization.
+  - The Queue / PlaybackManager / Playback ownership model remains scheduled for Stage 3 (each queue still instantiates its own `Playback` instance).
+  - The playback event-thread and callback-dispatch architecture remains scheduled for Stage 2 (callbacks execute on the MPV background event thread rather than the main thread; mitigated in the CLI via `LatchedStatus`).
+  - Database ownership, concurrency, busy timeouts, and schema migrations remain scheduled for Stage 4.
+  - `Track`/`CoreTrack` data model duplication and broader public API cleanup remain scheduled for Stage 5.
+  - Gapless playback transitions and edge cases have not been comprehensively validated.
+  - Android build and runtime verification has not been performed in this stage (NDK build scripts and ARM64 prebuilts were preserved intact, but not compiled on Android).
+- **Files Modified in Stage 1:**
+  - `core/CMakeLists.txt`
+  - `core/src/cli/main_cli.cpp`
+  - `core/src/playback/playback.cpp`
+  - `core/src/playback/queue.cpp`
 
 ---
 
-### Stage 2: Playback Event System & Threading Harmonization
+### Stage 2: Playback Event System & Threading Harmonization (NEXT PLANNED STAGE)
+- **Status:** **Next Planned Stage** (Pending authorization).
 - **Objective:** Establish the core-owned thread-safe event queue, non-blocking wakeup pipe, and consumer event pumping contract.
 - **Scope:**
   - Implement `EventQueue` in `core/src/core/eventqueue.h/.cpp` with mutex-protected event deque and non-blocking notification self-pipe.
@@ -362,11 +388,12 @@ To ensure seamless collaboration across multi-turn agent sessions, every agent m
 
 - **Current Repository State:**
   - Branch: `main` (synchronized with `origin/main`).
-  - Active Commit: `b7b4c71` ("Build core natively on Linux").
-  - Working Tree: Clean (`nothing to commit, working tree clean`).
-  - Native Desktop Build Artifacts: Verified shared library present at `build-desktop/libnatsuyume_core.so` (2.4 MB).
+  - Active Commit: `762b6aa` ("Complete desktop CLI integration").
+  - Working Tree: Clean except for updated `AGENTS.md`.
+  - Native Desktop Build Artifacts: Verified shared library present at `build-desktop/libnatsuyume_core.so` (7.2 MB Debug) and standalone CLI executable at `build-desktop/natsuyume-cli` (540 KB Debug).
 - **Completed Stages:**
   - **Stage 0: Desktop Build Foundation** (Completed, verified, and committed in `b7b4c71`).
-- **Current Phase:** Pre-Stage-1 Planning & Authorization.
-- **Authorization State:** **Stage 1 is NOT yet authorized.** All source code, build scripts, database schemas, and configuration files must remain unmodified.
-- **Next Step:** Explicit user authorization and execution of **Stage 1: CLI Integration & Qt Decoupling**.
+  - **Stage 1: CLI Integration & Qt Decoupling** (Completed, verified, and committed in `762b6aa`).
+- **Current Phase:** Post-Stage-1 Verification & Stage 2 Planning.
+- **Authorization State:** **Stage 2 is NOT yet authorized.** All source code, build scripts, database schemas, and configuration files must remain unmodified until Stage 2 planning is approved.
+- **Next Step:** Explicit user authorization and planning of **Stage 2: Playback Event System & Threading Harmonization**.
