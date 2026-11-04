@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CORE_SOURCES
     src/domain/track.cpp
     src/core/natsuyumecore.cpp
+    src/core/eventqueue.cpp
     src/core/lrcparser.cpp
     src/library/fileindexer.cpp
     src/library/library.cpp
@@ -114,4 +115,14 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/src/domain
     )
     target_link_libraries(natsuyume-cli PRIVATE natsuyume_core)
+
+    # -----------------------------------------------------------------------
+    # Standalone EventQueue Test (Isolated from core dependencies)
+    # -----------------------------------------------------------------------
+    add_executable(test_eventqueue tests/test_eventqueue.cpp src/core/eventqueue.cpp)
+    target_include_directories(test_eventqueue PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+    )
+    target_link_libraries(test_eventqueue PRIVATE pthread)
 endif()
